@@ -2,12 +2,15 @@
   "name": "mtls-verification-app",
   "version": "1.0.0",
   "description": "Aplikacja do weryfikacji połączeń mTLS",
-  "main": "index.js",
+  "main": "app/index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node app/index.js",
+    "dev": "node start.js",
+    "local": "node start.js",
+    "azure": "node app/index.js"
   },
   "engines": {
-    "node": ">=16"
+    "node": ">=18"
   },
   "dependencies": {},
   "author": "",

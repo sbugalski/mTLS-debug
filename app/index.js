@@ -5,10 +5,12 @@ const path = require('path');
 const crypto = require('crypto');
 const url = require('url');
 
-// Sprawdź, czy uruchamiamy na Azure Web App
+// Wykrywanie środowiska
 const isAzureWebApp = process.env.WEBSITE_SITE_NAME !== undefined;
+// Konfiguracja portu - Azure WebApp wymaga 8080
+const PORT = process.env.PORT || (isAzureWebApp ? 8080 : 3000);
 // Włączanie/wyłączanie szczegółowych logów
-const VERBOSE_LOGGING = process.env.VERBOSE_LOGGING === 'true' || true;
+const VERBOSE_LOGGING = process.env.VERBOSE_LOGGING === 'true' || false;
 
 // Funkcja do logowania (tylko gdy włączone szczegółowe logi)
 function verboseLog(...args) {
@@ -160,7 +162,7 @@ function handleRequest(req, res) {
   }
   
   // Endpoint /healthz dla Kubernetes/Azure
-  if (req.url === '/healthz') {
+  if (req.url === '/healthz' || req.url === '/health') {
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ status: "healthy" }));
@@ -322,58 +324,69 @@ function handleRequest(req, res) {
   res.end(responseHTML);
 }
 
-// Funkcja startująca serwer lokalnie
-function startLocalServer() {
-  try {
-    // Sprawdź czy istnieją certyfikaty SSL
-    const sslOptions = {
-      key: fs.readFileSync(path.join(__dirname, 'key.pem')),
-      cert: fs.readFileSync(path.join(__dirname, 'cert.pem')),
-      ca: fs.readFileSync(path.join(__dirname, 'cert.pem')),  // Używamy tego samego cert jako CA dla uproszczenia
-      requestCert: true,  // Żądaj certyfikatu klienta
-      rejectUnauthorized: false  // Nie odrzucaj niepodpisanych certyfikatów
-    };
+// Funkcja startująca serwer
+function startServer() {
+  // Sprawdź czy jesteśmy w Azure WebApp
+  if (isAzureWebApp) {
+    console.log(`Uruchamianie w środowisku Azure WebApp na porcie ${PORT}`);
     
-    // Utworzenie serwera HTTPS
-    const server = https.createServer(sslOptions, handleRequest);
-    const port = process.env.PORT || 3000;
-    
-    server.listen(port, () => {
-      console.log(`Serwer HTTPS uruchomiony na porcie ${port}`);
-      console.log(`Otwórz https://localhost:${port} w przeglądarce`);
-      console.log(`Endpoint API dostępny pod https://localhost:${port}/api`);
-      console.log('Pamiętaj, aby skonfigurować certyfikat klienta w przeglądarce!');
-    });
-
-    server.on('clientError', (err, socket) => {
-      console.error('Client error:', err);
-      socket.end('HTTP/1.1 400 Bad Request\r\n');
-    });
-    
-  } catch (error) {
-    console.error('Nie można uruchomić serwera HTTPS. Prawdopodobnie brakuje certyfikatów SSL.');
-    console.error('Błąd:', error.message);
-    console.log('Uruchamiam serwer HTTP bez mTLS...');
-    
-    // Jeśli nie ma certyfikatów, uruchom zwykły HTTP (do testów)
+    // Na Azure zawsze używamy HTTP - Azure obsługuje terminację SSL
     const server = http.createServer(handleRequest);
-    const port = process.env.PORT || 3000;
     
-    server.listen(port, () => {
-      console.log(`Serwer HTTP uruchomiony na porcie ${port}`);
-      console.log(`UWAGA: To jest serwer HTTP bez mTLS. Certyfikaty klienta nie będą weryfikowane.`);
-      console.log(`Otwórz http://localhost:${port} w przeglądarce`);
-      console.log(`Endpoint API dostępny pod http://localhost:${port}/api`);
+    server.listen(PORT, () => {
+      console.log(`Serwer HTTP uruchomiony na porcie ${PORT} (Azure WebApp)`);
     });
+    
+    server.on('error', (error) => {
+      console.error('Błąd serwera HTTP:', error);
+    });
+    
+  } else {
+    // Lokalne środowisko - próbujemy HTTPS, a jeśli nie ma certyfikatów to HTTP
+    console.log(`Uruchamianie w środowisku lokalnym na porcie ${PORT}`);
+    
+    try {
+      // Sprawdź czy istnieją certyfikaty SSL
+      const sslOptions = {
+        key: fs.readFileSync(path.join(__dirname, 'key.pem')),
+        cert: fs.readFileSync(path.join(__dirname, 'cert.pem')),
+        ca: fs.readFileSync(path.join(__dirname, 'cert.pem')),  // Używamy tego samego cert jako CA dla uproszczenia
+        requestCert: true,  // Żądaj certyfikatu klienta
+        rejectUnauthorized: false  // Nie odrzucaj niepodpisanych certyfikatów
+      };
+      
+      // Utworzenie serwera HTTPS
+      const server = https.createServer(sslOptions, handleRequest);
+      
+      server.listen(PORT, () => {
+        console.log(`Serwer HTTPS uruchomiony na porcie ${PORT}`);
+        console.log(`Otwórz https://localhost:${PORT} w przeglądarce`);
+        console.log(`Endpoint API dostępny pod https://localhost:${PORT}/api`);
+        console.log('Pamiętaj, aby skonfigurować certyfikat klienta w przeglądarce!');
+      });
+
+      server.on('clientError', (err, socket) => {
+        console.error('Client error:', err);
+        socket.end('HTTP/1.1 400 Bad Request\r\n');
+      });
+      
+    } catch (error) {
+      console.error('Nie można uruchomić serwera HTTPS. Prawdopodobnie brakuje certyfikatów SSL.');
+      console.error('Błąd:', error.message);
+      console.log('Uruchamiam serwer HTTP bez mTLS...');
+      
+      // Jeśli nie ma certyfikatów, uruchom zwykły HTTP (do testów)
+      const server = http.createServer(handleRequest);
+      
+      server.listen(PORT, () => {
+        console.log(`Serwer HTTP uruchomiony na porcie ${PORT}`);
+        console.log(`UWAGA: To jest serwer HTTP bez mTLS. Certyfikaty klienta nie będą weryfikowane.`);
+        console.log(`Otwórz http://localhost:${PORT} w przeglądarce`);
+        console.log(`Endpoint API dostępny pod http://localhost:${PORT}/api`);
+      });
+    }
   }
 }
 
-// Sprawdź czy jesteśmy na Azure Web App
-if (isAzureWebApp) {
-  // Na Azure Web App, po prostu eksportujemy funkcję obsługi
-  // Web App obsługuje routing do tej funkcji
-  module.exports = handleRequest;
-} else {
-  // Uruchom lokalny serwer
-  startLocalServer();
-}
+// Uruchomienie serwera
+startServer();
