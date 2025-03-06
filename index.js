@@ -5,10 +5,10 @@ const path = require('path');
 const crypto = require('crypto');
 const url = require('url');
 
-// Sprawdź, czy uruchamiamy na Vercel (środowisko serverless)
-const isVercel = process.env.VERCEL === '1';
+// Sprawdź, czy uruchamiamy na Azure Web App
+const isAzureWebApp = process.env.WEBSITE_SITE_NAME !== undefined;
 // Włączanie/wyłączanie szczegółowych logów
-const VERBOSE_LOGGING = true
+const VERBOSE_LOGGING = process.env.VERBOSE_LOGGING === 'true' || true;
 
 // Funkcja do logowania (tylko gdy włączone szczegółowe logi)
 function verboseLog(...args) {
@@ -17,15 +17,74 @@ function verboseLog(...args) {
   }
 }
 
+// Funkcja do parsowania certyfikatu w formacie PEM
+function parsePemCertificate(pemCert) {
+  try {
+    // Bardzo podstawowa implementacja parsowania certyfikatu PEM
+    // Dla pełnej implementacji warto użyć biblioteki jak 'node-forge'
+    
+    // Usuwamy nagłówki PEM jeśli istnieją
+    let cert = pemCert;
+    if (!cert.includes('-----BEGIN CERTIFICATE-----')) {
+      cert = `-----BEGIN CERTIFICATE-----\n${cert}\n-----END CERTIFICATE-----`;
+    }
+    
+    // Prosty parser do ekstrakcji informacji z certyfikatu
+    const extractField = (field) => {
+      const regex = new RegExp(`${field}=([^,]+)`, 'i');
+      const match = cert.match(regex);
+      return match ? match[1] : '';
+    };
+    
+    // Przekształcanie dat w formacie ASN.1 (bardzo uproszczone)
+    const extractDate = (field) => {
+      const regex = new RegExp(`${field}:\\s*([^\\n]+)`, 'i');
+      const match = cert.match(regex);
+      return match ? match[1] : '';
+    };
+    
+    return {
+      subject: {
+        CN: extractField('CN'),
+        O: extractField('O'),
+        OU: extractField('OU'),
+        C: extractField('C'),
+        ST: extractField('ST'),
+        L: extractField('L')
+      },
+      issuer: {
+        CN: extractField('CN'),
+        O: extractField('O'),
+        OU: extractField('OU')
+      },
+      validFrom: extractDate('Not Before'),
+      validTo: extractDate('Not After'),
+      serialNumber: extractField('Serial Number'),
+      fingerprint: crypto.createHash('sha256').update(cert).digest('hex')
+    };
+  } catch (error) {
+    console.error('Error parsing PEM certificate:', error);
+    return null;
+  }
+}
+
 // Funkcja pobierająca dane certyfikatu
 function getCertificateData(req) {
   // Pobieranie certyfikatu klienta - różne źródła zależnie od środowiska
   let clientCert;
   
-  if (isVercel) {
-    // Na Vercel, certyfikat może być w nagłówkach
-    clientCert = req.headers['x-forwarded-client-cert'] || req.headers['x-client-certificate'];
-    verboseLog('Vercel environment - cert from headers:', clientCert ? 'Present' : 'None');
+  if (isAzureWebApp) {
+    // Na Azure Web App, certyfikat może być w nagłówku X-ARR-ClientCert
+    clientCert = req.headers['x-arr-clientcert'];
+    verboseLog('Azure Web App environment - cert from headers:', clientCert ? 'Present' : 'None');
+    
+    if (clientCert) {
+      // Parsowanie certyfikatu z nagłówka Azure
+      return {
+        present: true,
+        ...parsePemCertificate(clientCert)
+      };
+    }
   } else {
     // Lokalnie, certyfikat jest dostępny bezpośrednio w req
     clientCert = req.socket.getPeerCertificate && req.socket.getPeerCertificate();
@@ -35,8 +94,8 @@ function getCertificateData(req) {
 
   // Sprawdzenie obecności certyfikatu
   const hasCertificate = clientCert && 
-                        (isVercel || 
-                        (!isVercel && Object.keys(clientCert).length > 0));
+                        (isAzureWebApp || 
+                        (!isAzureWebApp && Object.keys(clientCert).length > 0));
 
   // Przetwarzanie danych certyfikatu
   let certData = {
@@ -49,34 +108,18 @@ function getCertificateData(req) {
     fingerprint: 'Niedostępne'
   };
   
-  if (hasCertificate) {
+  if (hasCertificate && !isAzureWebApp) {
     try {
-      if (isVercel) {
-        // Parsowanie certyfikatu z nagłówka (format zależy od konfiguracji Vercel)
-        const certObj = typeof clientCert === 'string' ? JSON.parse(clientCert) : clientCert;
-        certData.subject = certObj.subject || {};
-        certData.issuer = certObj.issuer || {};
-        certData.validFrom = certObj.valid_from || 'Niedostępne';
-        certData.validTo = certObj.valid_to || 'Niedostępne';
-        certData.serialNumber = certObj.serialNumber || 'Niedostępne';
-        
-        // Obliczanie fingerprinta jeśli mamy surowe dane certyfikatu
-        if (certObj.raw || certObj.pem) {
-          const certRawData = certObj.raw || certObj.pem;
-          certData.fingerprint = crypto.createHash('sha256').update(certRawData).digest('hex');
-        }
-      } else {
-        // Lokalnie, certyfikat jest już obiektem
-        certData.subject = clientCert.subject || {};
-        certData.issuer = clientCert.issuer || {};
-        certData.validFrom = clientCert.valid_from || 'Niedostępne';
-        certData.validTo = clientCert.valid_to || 'Niedostępne';
-        certData.serialNumber = clientCert.serialNumber || 'Niedostępne';
-        
-        // Obliczanie fingerprinta
-        if (clientCert.raw) {
-          certData.fingerprint = crypto.createHash('sha256').update(clientCert.raw).digest('hex');
-        }
+      // Lokalnie, certyfikat jest już obiektem
+      certData.subject = clientCert.subject || {};
+      certData.issuer = clientCert.issuer || {};
+      certData.validFrom = clientCert.valid_from || 'Niedostępne';
+      certData.validTo = clientCert.valid_to || 'Niedostępne';
+      certData.serialNumber = clientCert.serialNumber || 'Niedostępne';
+      
+      // Obliczanie fingerprinta
+      if (clientCert.raw) {
+        certData.fingerprint = crypto.createHash('sha256').update(clientCert.raw).digest('hex');
       }
     } catch (error) {
       console.error('Error processing certificate:', error);
@@ -116,6 +159,14 @@ function handleRequest(req, res) {
     return;
   }
   
+  // Endpoint /healthz dla Kubernetes/Azure
+  if (req.url === '/healthz') {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ status: "healthy" }));
+    return;
+  }
+  
   // Parsowanie URL dla sprawdzenia ścieżki
   const parsedUrl = url.parse(req.url, true);
   const pathname = parsedUrl.pathname;
@@ -130,7 +181,7 @@ function handleRequest(req, res) {
       timestamp: new Date().toISOString(),
       clientCertificate: certData,
       environment: {
-        isVercel: isVercel
+        isAzureWebApp: isAzureWebApp
       },
       headers: req.headers
     };
@@ -205,11 +256,22 @@ function handleRequest(req, res) {
           background-color: #e8f5e9;
           border-radius: 4px;
         }
+        .environment-info {
+          margin-top: 10px;
+          padding: 5px 10px;
+          background-color: #e3f2fd;
+          border-radius: 4px;
+          display: inline-block;
+        }
       </style>
     </head>
     <body>
       <div class="container">
         <h1>mTLS-Debug</h1>
+        
+        <div class="environment-info">
+          Środowisko: ${isAzureWebApp ? 'Azure Web App' : 'Lokalne'}
+        </div>
         
         ${certData.present 
           ? '<p class="success">✅ Certyfikat klienta wykryty</p>' 
@@ -243,9 +305,6 @@ function handleRequest(req, res) {
         
         <h2>Nagłówki żądania</h2>
         <pre>${JSON.stringify(req.headers, null, 2)}</pre>
-        
-        <h2>Środowisko</h2>
-        <pre>Vercel: ${isVercel ? 'Tak' : 'Nie'}</pre>
         
         <div class="api-info">
           <h2>API Endpoint</h2>
@@ -309,12 +368,11 @@ function startLocalServer() {
   }
 }
 
-// Sprawdź czy kod jest uruchamiany jako moduł Vercel lub bezpośrednio
-if (isVercel) {
-  // Eksportuj funkcję obsługi dla Vercel
-  module.exports = (req, res) => {
-    handleRequest(req, res);
-  };
+// Sprawdź czy jesteśmy na Azure Web App
+if (isAzureWebApp) {
+  // Na Azure Web App, po prostu eksportujemy funkcję obsługi
+  // Web App obsługuje routing do tej funkcji
+  module.exports = handleRequest;
 } else {
   // Uruchom lokalny serwer
   startLocalServer();
