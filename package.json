@@ -4,15 +4,12 @@
   "description": "Aplikacja do weryfikacji połączeń mTLS",
   "main": "index.js",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start"
+    "start": "node index.js"
   },
-  "dependencies": {
-    "next": "^13.4.1",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+  "engines": {
+    "node": ">=16"
   },
+  "dependencies": {},
   "author": "",
   "license": "MIT"
 }
