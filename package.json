@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node app/index.js",
     "dev": "node start.js",
+    "local": "node start.js",
     "azure-local": "node debug.js",
     "azure": "node app/index.js"
   },
