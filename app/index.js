@@ -10,7 +10,7 @@ const isAzureWebApp = process.env.WEBSITE_SITE_NAME !== undefined;
 // Konfiguracja portu - Azure WebApp wymaga 8080
 const PORT = process.env.PORT || (isAzureWebApp ? 8080 : 3000);
 // Włączanie/wyłączanie szczegółowych logów
-const VERBOSE_LOGGING = process.env.VERBOSE_LOGGING === 'true' || false;
+const VERBOSE_LOGGING = process.env.VERBOSE_LOGGING === 'true' || true;
 
 // Funkcja do logowania (tylko gdy włączone szczegółowe logi)
 function verboseLog(...args) {
@@ -22,51 +22,114 @@ function verboseLog(...args) {
 // Funkcja do parsowania certyfikatu w formacie PEM
 function parsePemCertificate(pemCert) {
   try {
-    // Bardzo podstawowa implementacja parsowania certyfikatu PEM
-    // Dla pełnej implementacji warto użyć biblioteki jak 'node-forge'
+    // Logowanie surowego certyfikatu (pierwsze 100 znaków dla diagnostyki)
+    verboseLog('Raw certificate data (first 100 chars):', (pemCert || '').substring(0, 100));
     
-    // Usuwamy nagłówki PEM jeśli istnieją
+    // Jeśli nie ma certyfikatu, zwróć null
+    if (!pemCert) {
+      return null;
+    }
+    
+    // W Azure WebApp certyfikat jest przekazywany jako Base64, bez nagłówków PEM
+    // Dodajemy nagłówki PEM jeśli ich nie ma
     let cert = pemCert;
     if (!cert.includes('-----BEGIN CERTIFICATE-----')) {
       cert = `-----BEGIN CERTIFICATE-----\n${cert}\n-----END CERTIFICATE-----`;
     }
     
-    // Prosty parser do ekstrakcji informacji z certyfikatu
-    const extractField = (field) => {
-      const regex = new RegExp(`${field}=([^,]+)`, 'i');
-      const match = cert.match(regex);
-      return match ? match[1] : '';
-    };
+    // Na potrzeby debugowania - logujemy informacje o certyfikacie
+    verboseLog('Certificate length:', cert.length);
+    verboseLog('Certificate contains BEGIN marker:', cert.includes('-----BEGIN CERTIFICATE-----'));
     
-    // Przekształcanie dat w formacie ASN.1 (bardzo uproszczone)
-    const extractDate = (field) => {
-      const regex = new RegExp(`${field}:\\s*([^\\n]+)`, 'i');
-      const match = cert.match(regex);
-      return match ? match[1] : '';
-    };
+    // Extrakcja danych certyfikatu za pomocą wyrażeń regularnych
+    // To jest uproszczona implementacja, w rzeczywistych zastosowaniach
+    // sugerujemy użycie biblioteki jak node-forge
+    
+    // Wyciąganie Subject
+    const subjectCN = extractField(cert, 'CN');
+    const subjectO = extractField(cert, 'O');
+    const subjectOU = extractField(cert, 'OU');
+    const subjectC = extractField(cert, 'C');
+    const subjectST = extractField(cert, 'ST');
+    const subjectL = extractField(cert, 'L');
+    
+    // Wyciąganie Issuer
+    const issuerCN = extractField(cert, 'CN', 'issuer');
+    const issuerO = extractField(cert, 'O', 'issuer');
+    const issuerOU = extractField(cert, 'OU', 'issuer');
+    
+    // Daty ważności
+    const validFrom = extractDate(cert, 'Not Before');
+    const validTo = extractDate(cert, 'Not After');
+    
+    // Numer seryjny
+    const serialNumber = extractSerialNumber(cert);
+    
+    // Fingerprint - używamy całego certyfikatu
+    const fingerprint = crypto.createHash('sha256').update(cert).digest('hex');
     
     return {
       subject: {
-        CN: extractField('CN'),
-        O: extractField('O'),
-        OU: extractField('OU'),
-        C: extractField('C'),
-        ST: extractField('ST'),
-        L: extractField('L')
+        CN: subjectCN,
+        O: subjectO,
+        OU: subjectOU,
+        C: subjectC,
+        ST: subjectST,
+        L: subjectL
       },
       issuer: {
-        CN: extractField('CN'),
-        O: extractField('O'),
-        OU: extractField('OU')
+        CN: issuerCN,
+        O: issuerO,
+        OU: issuerOU
       },
-      validFrom: extractDate('Not Before'),
-      validTo: extractDate('Not After'),
-      serialNumber: extractField('Serial Number'),
-      fingerprint: crypto.createHash('sha256').update(cert).digest('hex')
+      validFrom: validFrom,
+      validTo: validTo,
+      serialNumber: serialNumber,
+      fingerprint: fingerprint
     };
   } catch (error) {
     console.error('Error parsing PEM certificate:', error);
-    return null;
+    return {
+      subject: {},
+      issuer: {},
+      validFrom: 'Error parsing',
+      validTo: 'Error parsing',
+      serialNumber: 'Error parsing',
+      fingerprint: 'Error parsing'
+    };
+  }
+}
+
+// Pomocnicza funkcja do ekstrahowania pól certyfikatu
+function extractField(cert, field, section = 'subject') {
+  try {
+    const regex = new RegExp(`${section}.*?${field}=([^,/]+)`, 'i');
+    const match = cert.match(regex);
+    return match ? match[1].trim() : '';
+  } catch (e) {
+    return '';
+  }
+}
+
+// Pomocnicza funkcja do ekstrahowania dat z certyfikatu
+function extractDate(cert, field) {
+  try {
+    const regex = new RegExp(`${field}:\\s*([^\\n]+)`, 'i');
+    const match = cert.match(regex);
+    return match ? match[1].trim() : '';
+  } catch (e) {
+    return '';
+  }
+}
+
+// Pomocnicza funkcja do ekstrahowania numeru seryjnego
+function extractSerialNumber(cert) {
+  try {
+    const regex = /Serial Number:\s*([^\n]+)/i;
+    const match = cert.match(regex);
+    return match ? match[1].trim() : '';
+  } catch (e) {
+    return '';
   }
 }
 
@@ -78,14 +141,19 @@ function getCertificateData(req) {
   if (isAzureWebApp) {
     // Na Azure Web App, certyfikat może być w nagłówku X-ARR-ClientCert
     clientCert = req.headers['x-arr-clientcert'];
-    verboseLog('Azure Web App environment - cert from headers:', clientCert ? 'Present' : 'None');
+    verboseLog('Azure Web App environment detected');
+    verboseLog('Headers:', JSON.stringify(req.headers, null, 2));
+    verboseLog('Certificate from headers:', clientCert ? 'Present (length: ' + clientCert.length + ')' : 'None');
     
     if (clientCert) {
       // Parsowanie certyfikatu z nagłówka Azure
-      return {
-        present: true,
-        ...parsePemCertificate(clientCert)
-      };
+      const certData = parsePemCertificate(clientCert);
+      if (certData) {
+        return {
+          present: true,
+          ...certData
+        };
+      }
     }
   } else {
     // Lokalnie, certyfikat jest dostępny bezpośrednio w req
@@ -251,6 +319,8 @@ function handleRequest(req, res) {
           padding: 10px;
           border-radius: 4px;
           overflow-x: auto;
+          max-height: 300px;
+          overflow-y: auto;
         }
         .api-info {
           margin-top: 20px;
