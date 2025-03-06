@@ -4,8 +4,6 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const url = require('url');
-// Trzeba dodać node-forge do zależności
-// npm install node-forge
 const forge = require('node-forge');
 
 // Wykrywanie środowiska
@@ -102,39 +100,6 @@ function parsePemCertificate(pemCert) {
       fingerprint: 'Error parsing',
       error: error.message
     };
-  }
-}
-
-// Pomocnicza funkcja do ekstrahowania pól certyfikatu (zachowana dla kompatybilności)
-function extractField(cert, field, section = 'subject') {
-  try {
-    const regex = new RegExp(`${section}.*?${field}=([^,/]+)`, 'i');
-    const match = cert.match(regex);
-    return match ? match[1].trim() : '';
-  } catch (e) {
-    return '';
-  }
-}
-
-// Pomocnicza funkcja do ekstrahowania dat z certyfikatu (zachowana dla kompatybilności)
-function extractDate(cert, field) {
-  try {
-    const regex = new RegExp(`${field}:\\s*([^\\n]+)`, 'i');
-    const match = cert.match(regex);
-    return match ? match[1].trim() : '';
-  } catch (e) {
-    return '';
-  }
-}
-
-// Pomocnicza funkcja do ekstrahowania numeru seryjnego (zachowana dla kompatybilności)
-function extractSerialNumber(cert) {
-  try {
-    const regex = /Serial Number:\s*([^\n]+)/i;
-    const match = cert.match(regex);
-    return match ? match[1].trim() : '';
-  } catch (e) {
-    return '';
   }
 }
 
