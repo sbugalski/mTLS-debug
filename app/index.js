@@ -347,10 +347,33 @@ function startServer() {
     
     try {
       // Sprawdź czy istnieją certyfikaty SSL
+      // Najpierw sprawdź ścieżkę względem folderu app/, potem względem folderu głównego
+      let keyFile, certFile, caFile;
+      let certDir = __dirname; // domyślnie folder app/
+      
+      // Sprawdź czy certyfikaty są w folderze app/
+      if (fs.existsSync(path.join(certDir, 'key.pem')) && 
+          fs.existsSync(path.join(certDir, 'cert.pem'))) {
+        keyFile = path.join(certDir, 'key.pem');
+        certFile = path.join(certDir, 'cert.pem');
+        caFile = path.join(certDir, 'cert.pem');
+      } else {
+        // Sprawdź czy certyfikaty są w folderze głównym (jeden poziom wyżej)
+        certDir = path.join(__dirname, '..');
+        if (fs.existsSync(path.join(certDir, 'key.pem')) &&
+            fs.existsSync(path.join(certDir, 'cert.pem'))) {
+          keyFile = path.join(certDir, 'key.pem');
+          certFile = path.join(certDir, 'cert.pem'); 
+          caFile = path.join(certDir, 'cert.pem');
+        } else {
+          throw new Error('Nie znaleziono certyfikatów SSL');
+        }
+      }
+      
       const sslOptions = {
-        key: fs.readFileSync(path.join(__dirname, 'key.pem')),
-        cert: fs.readFileSync(path.join(__dirname, 'cert.pem')),
-        ca: fs.readFileSync(path.join(__dirname, 'cert.pem')),  // Używamy tego samego cert jako CA dla uproszczenia
+        key: fs.readFileSync(keyFile),
+        cert: fs.readFileSync(certFile),
+        ca: fs.readFileSync(caFile),  // Używamy tego samego cert jako CA dla uproszczenia
         requestCert: true,  // Żądaj certyfikatu klienta
         rejectUnauthorized: false  // Nie odrzucaj niepodpisanych certyfikatów
       };
