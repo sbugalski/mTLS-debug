@@ -153,9 +153,9 @@ function getCertificateData(req) {
       // Lokalnie, certyfikat jest już obiektem
       certData.subject = clientCert.subject || {};
       certData.issuer = clientCert.issuer || {};
-      certData.validFrom = clientCert.valid_from || 'Niedostępne';
-      certData.validTo = clientCert.valid_to || 'Niedostępne';
-      certData.serialNumber = clientCert.serialNumber || 'Niedostępne';
+      certData.validFrom = clientCert.valid_from || {};
+      certData.validTo = clientCert.valid_to || {} ;
+      certData.serialNumber = clientCert.serialNumber || {};
       
       // Obliczanie fingerprinta
       if (clientCert.raw) {
