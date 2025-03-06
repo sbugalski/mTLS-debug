@@ -4,6 +4,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const url = require('url');
+// Trzeba dodać node-forge do zależności
+// npm install node-forge
+const forge = require('node-forge');
 
 // Wykrywanie środowiska
 const isAzureWebApp = process.env.WEBSITE_SITE_NAME !== undefined;
@@ -19,7 +22,7 @@ function verboseLog(...args) {
   }
 }
 
-// Funkcja do parsowania certyfikatu w formacie PEM
+// Funkcja do parsowania certyfikatu w formacie PEM z wykorzystaniem node-forge
 function parsePemCertificate(pemCert) {
   try {
     // Logowanie surowego certyfikatu (pierwsze 100 znaków dla diagnostyki)
@@ -32,75 +35,77 @@ function parsePemCertificate(pemCert) {
     
     // W Azure WebApp certyfikat jest przekazywany jako Base64, bez nagłówków PEM
     // Dodajemy nagłówki PEM jeśli ich nie ma
-    let cert = pemCert;
-    if (!cert.includes('-----BEGIN CERTIFICATE-----')) {
-      cert = `-----BEGIN CERTIFICATE-----\n${cert}\n-----END CERTIFICATE-----`;
+    let certPem = pemCert;
+    if (!certPem.includes('-----BEGIN CERTIFICATE-----')) {
+      certPem = `-----BEGIN CERTIFICATE-----\n${pemCert}\n-----END CERTIFICATE-----`;
     }
     
     // Na potrzeby debugowania - logujemy informacje o certyfikacie
-    verboseLog('Certificate length:', cert.length);
-    verboseLog('Certificate contains BEGIN marker:', cert.includes('-----BEGIN CERTIFICATE-----'));
+    verboseLog('Certificate length:', certPem.length);
+    verboseLog('Certificate contains BEGIN marker:', certPem.includes('-----BEGIN CERTIFICATE-----'));
     
-    // Extrakcja danych certyfikatu za pomocą wyrażeń regularnych
-    // To jest uproszczona implementacja, w rzeczywistych zastosowaniach
-    // sugerujemy użycie biblioteki jak node-forge
+    // Użycie node-forge do parsowania certyfikatu
+    const cert = forge.pki.certificateFromPem(certPem);
     
-    // Wyciąganie Subject
-    const subjectCN = extractField(cert, 'CN');
-    const subjectO = extractField(cert, 'O');
-    const subjectOU = extractField(cert, 'OU');
-    const subjectC = extractField(cert, 'C');
-    const subjectST = extractField(cert, 'ST');
-    const subjectL = extractField(cert, 'L');
+    // Pobieranie danych subject
+    const subject = {};
+    cert.subject.attributes.forEach(attr => {
+      subject[attr.name || attr.shortName || attr.type] = attr.value;
+    });
     
-    // Wyciąganie Issuer
-    const issuerCN = extractField(cert, 'CN', 'issuer');
-    const issuerO = extractField(cert, 'O', 'issuer');
-    const issuerOU = extractField(cert, 'OU', 'issuer');
+    // Pobieranie danych issuer
+    const issuer = {};
+    cert.issuer.attributes.forEach(attr => {
+      issuer[attr.name || attr.shortName || attr.type] = attr.value;
+    });
     
     // Daty ważności
-    const validFrom = extractDate(cert, 'Not Before');
-    const validTo = extractDate(cert, 'Not After');
+    const validFrom = cert.validity.notBefore;
+    const validTo = cert.validity.notAfter;
     
     // Numer seryjny
-    const serialNumber = extractSerialNumber(cert);
+    const serialNumber = cert.serialNumber;
     
-    // Fingerprint - używamy całego certyfikatu
-    const fingerprint = crypto.createHash('sha256').update(cert).digest('hex');
+    // Generowanie fingerprintu SHA-256
+    const der = forge.asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes();
+    const fingerprint = forge.md.sha256.create().update(der).digest().toHex();
     
     return {
       subject: {
-        CN: subjectCN,
-        O: subjectO,
-        OU: subjectOU,
-        C: subjectC,
-        ST: subjectST,
-        L: subjectL
+        CN: subject.commonName || subject.CN || '',
+        O: subject.organizationName || subject.O || '',
+        OU: subject.organizationalUnitName || subject.OU || '',
+        C: subject.countryName || subject.C || '',
+        ST: subject.stateOrProvinceName || subject.ST || '',
+        L: subject.localityName || subject.L || ''
       },
       issuer: {
-        CN: issuerCN,
-        O: issuerO,
-        OU: issuerOU
+        CN: issuer.commonName || issuer.CN || '',
+        O: issuer.organizationName || issuer.O || '',
+        OU: issuer.organizationalUnitName || issuer.OU || ''
       },
-      validFrom: validFrom,
-      validTo: validTo,
+      validFrom: validFrom.toString(),
+      validTo: validTo.toString(),
       serialNumber: serialNumber,
       fingerprint: fingerprint
     };
   } catch (error) {
-    console.error('Error parsing PEM certificate:', error);
+    console.error('Error parsing PEM certificate with node-forge:', error);
+    // Dodanie bardziej szczegółowej informacji o błędzie
+    verboseLog('Certificate that failed to parse:', pemCert);
     return {
       subject: {},
       issuer: {},
       validFrom: 'Error parsing',
       validTo: 'Error parsing',
       serialNumber: 'Error parsing',
-      fingerprint: 'Error parsing'
+      fingerprint: 'Error parsing',
+      error: error.message
     };
   }
 }
 
-// Pomocnicza funkcja do ekstrahowania pól certyfikatu
+// Pomocnicza funkcja do ekstrahowania pól certyfikatu (zachowana dla kompatybilności)
 function extractField(cert, field, section = 'subject') {
   try {
     const regex = new RegExp(`${section}.*?${field}=([^,/]+)`, 'i');
@@ -111,7 +116,7 @@ function extractField(cert, field, section = 'subject') {
   }
 }
 
-// Pomocnicza funkcja do ekstrahowania dat z certyfikatu
+// Pomocnicza funkcja do ekstrahowania dat z certyfikatu (zachowana dla kompatybilności)
 function extractDate(cert, field) {
   try {
     const regex = new RegExp(`${field}:\\s*([^\\n]+)`, 'i');
@@ -122,7 +127,7 @@ function extractDate(cert, field) {
   }
 }
 
-// Pomocnicza funkcja do ekstrahowania numeru seryjnego
+// Pomocnicza funkcja do ekstrahowania numeru seryjnego (zachowana dla kompatybilności)
 function extractSerialNumber(cert) {
   try {
     const regex = /Serial Number:\s*([^\n]+)/i;
